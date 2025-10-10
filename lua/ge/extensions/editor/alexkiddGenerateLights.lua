@@ -21,6 +21,7 @@ local selectedTemplate = {
 }
 local selectedLightIds = {}
 local selectedTSStaticIds = {}
+local useSimGroup = im.BoolPtr(true)
 
 -- Helper function to get forest data
 local function getForestData()
@@ -251,7 +252,7 @@ local function createLightFromTemplate(templateLightId, relativePos, targetObj, 
   local uniqueName = "generated_" .. string.lower(lightType) .. "_" .. lightIndex .. "_" .. os.time() .. "_" .. math.random(100, 999)
   newLight.name = uniqueName
   newLight:setField('internalName', 0, uniqueName)
-  newLight:registerObject()
+  newLight:registerObject(uniqueName)
   
   -- Copy all properties from template
   newLight:assignFieldsFromObject(templateLight)
@@ -259,7 +260,7 @@ local function createLightFromTemplate(templateLightId, relativePos, targetObj, 
   newLight:setField('internalName', 0, uniqueName)
   newLight.name = uniqueName
   
-  -- Get target position and rotation
+  -- Get target position and rotation (AFTER copying fields)
   local targetPos, targetRot
   if type(targetObj) == "userdata" and targetObj.getPosition then
     targetPos = vec3(targetObj:getPosition())
@@ -273,6 +274,8 @@ local function createLightFromTemplate(templateLightId, relativePos, targetObj, 
   local finalLightPos = targetPos + rotatedOffset
   
   newLight:setPosition(finalLightPos)
+  
+  -- Add to target group AFTER everything else
   targetGroup:addObject(newLight.obj)
   
   log("I", "alexkidd_generate_lights", "Created " .. lightType .. " at position: " .. finalLightPos.x .. ", " .. finalLightPos.y .. ", " .. finalLightPos.z)
@@ -299,7 +302,7 @@ local function createTSStaticFromTemplate(templateTSStaticId, relativePos, relat
   local uniqueName = "generated_tsstatic_" .. objectIndex .. "_" .. os.time() .. "_" .. math.random(100, 999)
   newTSStatic.name = uniqueName
   newTSStatic:setField('internalName', 0, uniqueName)
-  newTSStatic:registerObject()
+  newTSStatic:registerObject(uniqueName)
   
   -- Copy all properties from template (this will overwrite some fields, so we set them again after)
   newTSStatic:assignFieldsFromObject(templateTSStatic)
@@ -308,7 +311,7 @@ local function createTSStaticFromTemplate(templateTSStaticId, relativePos, relat
   newTSStatic:setField('internalName', 0, uniqueName)
   newTSStatic.name = uniqueName
   
-  -- Get target position and rotation
+  -- Get target position and rotation (AFTER copying fields)
   local targetPos, targetRot
   if type(targetObj) == "userdata" and targetObj.getPosition then
     targetPos = vec3(targetObj:getPosition())
@@ -325,7 +328,10 @@ local function createTSStaticFromTemplate(templateTSStaticId, relativePos, relat
   
   newTSStatic:setPosRot(finalPos.x, finalPos.y, finalPos.z, finalRot.x, finalRot.y, finalRot.z, finalRot.w)
   
+  -- Add to target group AFTER everything else
   targetGroup:addObject(newTSStatic.obj)
+  newTSStatic:setField('internalName', 0, uniqueName)
+  newTSStatic.name = uniqueName
   
   log("I", "alexkidd_generate_lights", "Created TSStatic at position: " .. finalPos.x .. ", " .. finalPos.y .. ", " .. finalPos.z)
   
@@ -375,13 +381,47 @@ local function generateObjects()
     return
   end
   
-  local groupNumber = getNextGeneratedLightsNumber()
-  local groupName = "generated_lights_" .. groupNumber
-  local newGroup = createObject("SimGroup")
-  newGroup:registerObject(groupName)
-  scenetree.MissionGroup:addObject(newGroup)
+  -- Determine target groups for each object type
+  local lightTargetGroup, tsStaticTargetGroup
   
-  log("I", "alexkidd_generate_lights", "Created group: " .. groupName)
+  if useSimGroup[0] then
+    -- Create a new folder/group for all objects
+    local groupNumber = getNextGeneratedLightsNumber()
+    local groupName = "generated_lights_" .. groupNumber
+    local newGroup = createObject("SimGroup")
+    newGroup:registerObject(groupName)
+    scenetree.MissionGroup:addObject(newGroup)
+    lightTargetGroup = newGroup
+    tsStaticTargetGroup = newGroup
+    log("I", "alexkidd_generate_lights", "Created group: " .. groupName)
+  else
+    -- Use the parent group of each source object type
+    -- Get the parent group for lights
+    if #relativeTransforms > 0 then
+      local firstLightId = relativeTransforms[1].lightId
+      local lightObj = scenetree.findObjectById(firstLightId)
+      if lightObj then
+        local parentGroupId = tonumber(lightObj:getField("parentGroup", 0))
+        lightTargetGroup = scenetree.findObjectById(parentGroupId) or scenetree.MissionGroup
+        log("I", "alexkidd_generate_lights", "Using light source parent group: " .. (lightTargetGroup:getName() or "MissionGroup"))
+      else
+        lightTargetGroup = scenetree.MissionGroup
+      end
+    end
+    
+    -- Get the parent group for TSStatics
+    if #relativeTSStaticTransforms > 0 then
+      local firstTSStaticId = relativeTSStaticTransforms[1].tsStaticId
+      local tsStaticObj = scenetree.findObjectById(firstTSStaticId)
+      if tsStaticObj then
+        local parentGroupId = tonumber(tsStaticObj:getField("parentGroup", 0))
+        tsStaticTargetGroup = scenetree.findObjectById(parentGroupId) or scenetree.MissionGroup
+        log("I", "alexkidd_generate_lights", "Using TSStatic source parent group: " .. (tsStaticTargetGroup:getName() or "MissionGroup"))
+      else
+        tsStaticTargetGroup = scenetree.MissionGroup
+      end
+    end
+  end
   
   local targetObjects = {}
   local lightsCreated = 0
@@ -424,7 +464,7 @@ local function generateObjects()
             transform.relativePosition,
             targetShape,
             lightIndex,
-            newGroup
+            lightTargetGroup
           )
           if newLight then
             lightsCreated = lightsCreated + 1
@@ -439,7 +479,7 @@ local function generateObjects()
             transform.relativeRotation,
             targetShape,
             objectIndex,
-            newGroup
+            tsStaticTargetGroup
           )
           if newTSStatic then
             tsStaticsCreated = tsStaticsCreated + 1
@@ -467,7 +507,7 @@ local function generateObjects()
             transform.relativePosition,
             itemData,
             lightIndex,
-            newGroup
+            lightTargetGroup
           )
           if newLight then
             lightsCreated = lightsCreated + 1
@@ -482,7 +522,7 @@ local function generateObjects()
             transform.relativeRotation,
             itemData,
             objectIndex,
-            newGroup
+            tsStaticTargetGroup
           )
           if newTSStatic then
             tsStaticsCreated = tsStaticsCreated + 1
@@ -492,6 +532,11 @@ local function generateObjects()
     end
   end
   
+  local groupNames = {}
+  if lightTargetGroup then table.insert(groupNames, lightTargetGroup:getName() or "MissionGroup") end
+  if tsStaticTargetGroup and tsStaticTargetGroup ~= lightTargetGroup then table.insert(groupNames, tsStaticTargetGroup:getName() or "MissionGroup") end
+  local groupName = table.concat(groupNames, " and ") 
+  if groupName == "" then groupName = "MissionGroup" end
   log("I", "alexkidd_generate_lights", "Generated " .. lightsCreated .. " lights and " .. tsStaticsCreated .. " TSStatic objects in group " .. groupName)
   editor.setDirty()
 end
@@ -604,7 +649,14 @@ local function onEditorGui()
     im.tooltip("Clear the current TSStatic selection")
     
     im.Dummy(im.ImVec2(0, 10))
-    im.TextUnformatted("4. Generate Objects")
+    im.TextUnformatted("4. Options")
+    im.Separator()
+    
+    im.Checkbox("Use New Folder", useSimGroup)
+    im.tooltip("If checked, creates a new 'generated_lights_X' folder. If unchecked, places objects in the same group as the template object.")
+    
+    im.Dummy(im.ImVec2(0, 10))
+    im.TextUnformatted("5. Generate Objects")
     im.Separator()
     
     -- Generate button with dynamic text
