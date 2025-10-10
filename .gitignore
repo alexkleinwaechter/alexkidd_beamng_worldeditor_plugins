@@ -1,41 +1,14 @@
-# Compiled Lua sources
-luac.out
+# Ignore everything by default
+*
 
-# luarocks build files
-*.src.rock
-*.zip
-*.tar.gz
+# Allow only files starting with "alexkidd" in the lua/ge/extensions/editor directory
+!lua/
+!lua/ge/
+!lua/ge/extensions/
+!lua/ge/extensions/editor/
+!lua/ge/extensions/editor/alexkidd*.*
 
-# Object files
-*.o
-*.os
-*.ko
-*.obj
-*.elf
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-*.def
-*.exp
-
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
-
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
+# Allow essential project files
+!README.md
+!.gitignore
 
