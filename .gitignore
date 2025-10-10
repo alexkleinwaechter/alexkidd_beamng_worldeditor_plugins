@@ -8,6 +8,9 @@
 !lua/ge/extensions/editor/
 !lua/ge/extensions/editor/alexkidd*.*
 
+# Allow markdown documentation files in the editor directory
+!lua/ge/extensions/editor/*.md
+
 # Allow essential project files
 !README.md
 !.gitignore
