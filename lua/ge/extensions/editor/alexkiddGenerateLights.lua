@@ -352,15 +352,23 @@ local function findForestItemsByShapeFile(shapeFile)
   return items
 end
 
-local function generateLights()
+local function generateObjects()
   if not selectedTemplate.type or (#selectedLightIds == 0 and #selectedTSStaticIds == 0) then
-    log("W", "alexkidd_generate_lights", "Need both a template object and lights/TSStatic objects selected")
+    log("W", "alexkidd_generate_lights", "Need a template object and at least one light or TSStatic object selected")
     return
   end
   
-  local relativeTransforms = calculateRelativeTransforms(selectedTemplate, selectedLightIds)
-  local relativeTransforms = calculateRelativeTransforms(selectedTemplate, selectedLightIds)
-  local relativeTSStaticTransforms = calculateRelativeTransformsForTSStatic(selectedTemplate, selectedTSStaticIds)
+  local relativeTransforms = {}
+  local relativeTSStaticTransforms = {}
+  
+  -- Calculate relative transforms only if objects are selected
+  if #selectedLightIds > 0 then
+    relativeTransforms = calculateRelativeTransforms(selectedTemplate, selectedLightIds)
+  end
+  
+  if #selectedTSStaticIds > 0 then
+    relativeTSStaticTransforms = calculateRelativeTransformsForTSStatic(selectedTemplate, selectedTSStaticIds)
+  end
   
   if #relativeTransforms == 0 and #relativeTSStaticTransforms == 0 then
     log("E", "alexkidd_generate_lights", "Could not calculate relative transforms")
@@ -536,7 +544,7 @@ local function onEditorGui()
     im.tooltip("Select a TSStatic object OR a Forest item in the world editor, then click this button")
     
     im.Dummy(im.ImVec2(0, 10))
-    im.TextUnformatted("2. Select Light Object(s)")
+    im.TextUnformatted("2. Select Light Object(s) (Optional)")
     im.Separator()
     
     -- Display selected lights
@@ -557,6 +565,13 @@ local function onEditorGui()
       end
     end
     im.tooltip("Select one or more PointLight or SpotLight objects in the world editor, then click this button")
+    
+    im.SameLine()
+    if im.Button("Clear Lights") then
+      selectedLightIds = {}
+      log("I", "alexkidd_generate_lights", "Cleared light selection")
+    end
+    im.tooltip("Clear the current light selection")
     
     im.Dummy(im.ImVec2(0, 10))
     im.TextUnformatted("3. Select TSStatic Object(s) to Copy (Optional)")
@@ -581,20 +596,47 @@ local function onEditorGui()
     end
     im.tooltip("Select one or more TSStatic objects in the world editor, then click this button")
     
+    im.SameLine()
+    if im.Button("Clear TSStatic") then
+      selectedTSStaticIds = {}
+      log("I", "alexkidd_generate_lights", "Cleared TSStatic selection")
+    end
+    im.tooltip("Clear the current TSStatic selection")
+    
     im.Dummy(im.ImVec2(0, 10))
     im.TextUnformatted("4. Generate Objects")
     im.Separator()
     
-    -- Generate Lights button
+    -- Generate button with dynamic text
     local canGenerate = selectedTemplate.type ~= nil and (#selectedLightIds > 0 or #selectedTSStaticIds > 0)
     if not canGenerate then
       im.BeginDisabled()
     end
     
-    if im.Button("Generate Lights") then
-      generateLights()
+    -- Dynamic button text based on what's selected
+    local buttonText = "Generate Objects"
+    if #selectedLightIds > 0 and #selectedTSStaticIds > 0 then
+      buttonText = "Generate Lights & TSStatic Objects"
+    elseif #selectedLightIds > 0 then
+      buttonText = "Generate Lights"
+    elseif #selectedTSStaticIds > 0 then
+      buttonText = "Generate TSStatic Objects"
     end
-    im.tooltip("Generate lights and TSStatic objects at all matching objects in the scene (TSStatic or Forest items)")
+    
+    if im.Button(buttonText) then
+      generateObjects()
+    end
+    
+    -- Dynamic tooltip based on what's selected
+    local tooltipText = "Generate selected objects at all matching locations in the scene"
+    if #selectedLightIds > 0 and #selectedTSStaticIds > 0 then
+      tooltipText = "Generate " .. #selectedLightIds .. " light(s) and " .. #selectedTSStaticIds .. " TSStatic object(s) at all matching locations"
+    elseif #selectedLightIds > 0 then
+      tooltipText = "Generate " .. #selectedLightIds .. " light(s) at all matching locations"
+    elseif #selectedTSStaticIds > 0 then
+      tooltipText = "Generate " .. #selectedTSStaticIds .. " TSStatic object(s) at all matching locations"
+    end
+    im.tooltip(tooltipText)
     
     if not canGenerate then
       im.EndDisabled()
@@ -603,7 +645,7 @@ local function onEditorGui()
     im.Dummy(im.ImVec2(0, 10))
     im.Separator()
     im.TextUnformatted("Info:")
-    im.TextWrapped("This tool generates lights and TSStatic objects relative to template objects. Supports both TSStatic objects AND Forest items! Select a template object, its lights and/or TSStatic objects, then click Generate Lights.")
+    im.TextWrapped("This tool generates lights and/or TSStatic objects relative to template objects. Supports both TSStatic objects AND Forest items! Select a template object, then select lights and/or TSStatic objects to copy. At least one type must be selected.")
   end
   editor.endWindow()
 end
