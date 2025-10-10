@@ -20,6 +20,7 @@ local selectedTemplate = {
   position = nil
 }
 local selectedLightIds = {}
+local selectedTSStaticIds = {}
 
 -- Helper function to get forest data
 local function getForestData()
@@ -178,6 +179,64 @@ local function calculateRelativeTransforms(template, lightIds)
   return relativeTransforms
 end
 
+-- Calculate relative transforms of TSStatic objects relative to the shape
+local function calculateRelativeTransformsForTSStatic(template, tsStaticIds)
+  if not template or not template.type then return {} end
+  
+  local shapePos, shapeRot
+  
+  if template.type == "TSStatic" then
+    local shape = scenetree.findObjectById(template.id)
+    if not shape then return {} end
+    shapePos = vec3(shape:getPosition())
+    shapeRot = quat(shape:getRotation())
+  elseif template.type == "ForestItem" then
+    local forestData = getForestData()
+    if not forestData then return {} end
+    
+    local forestItem = nil
+    for _, item in ipairs(forestData:getItems()) do
+      if item:getKey() == template.id then
+        forestItem = item
+        break
+      end
+    end
+    
+    if not forestItem then return {} end
+    
+    shapePos = vec3(forestItem:getPosition())
+    local transform = forestItem:getTransform()
+    shapeRot = quatFromMatrix(transform)
+  else
+    return {}
+  end
+  
+  local relativeTransforms = {}
+  local shapeRotInverse = quat(shapeRot)
+  shapeRotInverse:inverse()
+  
+  for _, tsStaticId in ipairs(tsStaticIds) do
+    local tsStatic = scenetree.findObjectById(tsStaticId)
+    if tsStatic then
+      local tsStaticPos = vec3(tsStatic:getPosition())
+      local tsStaticRot = quat(tsStatic:getRotation())
+      local worldRelativePos = tsStaticPos - shapePos
+      local localRelativePos = shapeRotInverse * worldRelativePos
+      
+      -- Calculate relative rotation
+      local localRelativeRot = shapeRotInverse * tsStaticRot
+      
+      table.insert(relativeTransforms, {
+        tsStaticId = tsStaticId,
+        relativePosition = localRelativePos,
+        relativeRotation = localRelativeRot
+      })
+    end
+  end
+  
+  return relativeTransforms
+end
+
 -- Create a light from template at target object
 local function createLightFromTemplate(templateLightId, relativePos, targetObj, lightIndex, targetGroup)
   local templateLight = scenetree.findObjectById(templateLightId)
@@ -221,6 +280,58 @@ local function createLightFromTemplate(templateLightId, relativePos, targetObj, 
   return newLight
 end
 
+-- Create a TSStatic from template at target object
+local function createTSStaticFromTemplate(templateTSStaticId, relativePos, relativeRot, targetObj, objectIndex, targetGroup)
+  local templateTSStatic = scenetree.findObjectById(templateTSStaticId)
+  
+  local newTSStatic = createObject("TSStatic")
+  if not newTSStatic then
+    log("E", "alexkidd_generate_lights", "Failed to create TSStatic")
+    return nil
+  end
+  
+  -- Set shapeName BEFORE registering the object (required for TSStatic)
+  local shapeName = templateTSStatic:getField('shapeName', 0)
+  if shapeName and shapeName ~= "" then
+    newTSStatic:setField('shapeName', 0, shapeName)
+  end
+  
+  local uniqueName = "generated_tsstatic_" .. objectIndex .. "_" .. os.time() .. "_" .. math.random(100, 999)
+  newTSStatic.name = uniqueName
+  newTSStatic:setField('internalName', 0, uniqueName)
+  newTSStatic:registerObject()
+  
+  -- Copy all properties from template (this will overwrite some fields, so we set them again after)
+  newTSStatic:assignFieldsFromObject(templateTSStatic)
+  
+  -- Restore unique name after copying fields
+  newTSStatic:setField('internalName', 0, uniqueName)
+  newTSStatic.name = uniqueName
+  
+  -- Get target position and rotation
+  local targetPos, targetRot
+  if type(targetObj) == "userdata" and targetObj.getPosition then
+    targetPos = vec3(targetObj:getPosition())
+    targetRot = quat(targetObj:getRotation())
+  else
+    targetPos = targetObj.pos
+    targetRot = targetObj.rot
+  end
+  
+  -- Apply relative position and rotation
+  local rotatedOffset = targetRot * relativePos
+  local finalPos = targetPos + rotatedOffset
+  local finalRot = targetRot * relativeRot
+  
+  newTSStatic:setPosRot(finalPos.x, finalPos.y, finalPos.z, finalRot.x, finalRot.y, finalRot.z, finalRot.w)
+  
+  targetGroup:addObject(newTSStatic.obj)
+  
+  log("I", "alexkidd_generate_lights", "Created TSStatic at position: " .. finalPos.x .. ", " .. finalPos.y .. ", " .. finalPos.z)
+  
+  return newTSStatic
+end
+
 -- Find all forest items matching a shape file
 local function findForestItemsByShapeFile(shapeFile)
   local forestData = getForestData()
@@ -242,13 +353,16 @@ local function findForestItemsByShapeFile(shapeFile)
 end
 
 local function generateLights()
-  if not selectedTemplate.type or #selectedLightIds == 0 then
-    log("W", "alexkidd_generate_lights", "Need both a template object and lights selected")
+  if not selectedTemplate.type or (#selectedLightIds == 0 and #selectedTSStaticIds == 0) then
+    log("W", "alexkidd_generate_lights", "Need both a template object and lights/TSStatic objects selected")
     return
   end
   
   local relativeTransforms = calculateRelativeTransforms(selectedTemplate, selectedLightIds)
-  if #relativeTransforms == 0 then
+  local relativeTransforms = calculateRelativeTransforms(selectedTemplate, selectedLightIds)
+  local relativeTSStaticTransforms = calculateRelativeTransformsForTSStatic(selectedTemplate, selectedTSStaticIds)
+  
+  if #relativeTransforms == 0 and #relativeTSStaticTransforms == 0 then
     log("E", "alexkidd_generate_lights", "Could not calculate relative transforms")
     return
   end
@@ -263,6 +377,7 @@ local function generateLights()
   
   local targetObjects = {}
   local lightsCreated = 0
+  local tsStaticsCreated = 0
   
   if selectedTemplate.type == "TSStatic" then
     local function findShapesInGroup(group, shapeName, results)
@@ -307,6 +422,21 @@ local function generateLights()
             lightsCreated = lightsCreated + 1
           end
         end
+        
+        for transformIndex, transform in ipairs(relativeTSStaticTransforms) do
+          local objectIndex = (shapeIndex - 1) * #relativeTSStaticTransforms + transformIndex
+          local newTSStatic = createTSStaticFromTemplate(
+            transform.tsStaticId,
+            transform.relativePosition,
+            transform.relativeRotation,
+            targetShape,
+            objectIndex,
+            newGroup
+          )
+          if newTSStatic then
+            tsStaticsCreated = tsStaticsCreated + 1
+          end
+        end
       end
     end
     
@@ -335,11 +465,26 @@ local function generateLights()
             lightsCreated = lightsCreated + 1
           end
         end
+        
+        for transformIndex, transform in ipairs(relativeTSStaticTransforms) do
+          local objectIndex = (itemIndex - 1) * #relativeTSStaticTransforms + transformIndex
+          local newTSStatic = createTSStaticFromTemplate(
+            transform.tsStaticId,
+            transform.relativePosition,
+            transform.relativeRotation,
+            itemData,
+            objectIndex,
+            newGroup
+          )
+          if newTSStatic then
+            tsStaticsCreated = tsStaticsCreated + 1
+          end
+        end
       end
     end
   end
   
-  log("I", "alexkidd_generate_lights", "Generated " .. lightsCreated .. " lights in group " .. groupName)
+  log("I", "alexkidd_generate_lights", "Generated " .. lightsCreated .. " lights and " .. tsStaticsCreated .. " TSStatic objects in group " .. groupName)
   editor.setDirty()
 end
 
@@ -356,6 +501,12 @@ local function onEditorGui()
     for i = #selectedLightIds, 1, -1 do
       if not scenetree.findObjectById(selectedLightIds[i]) then
         table.remove(selectedLightIds, i)
+      end
+    end
+    
+    for i = #selectedTSStaticIds, 1, -1 do
+      if not scenetree.findObjectById(selectedTSStaticIds[i]) then
+        table.remove(selectedTSStaticIds, i)
       end
     end
     
@@ -408,11 +559,34 @@ local function onEditorGui()
     im.tooltip("Select one or more PointLight or SpotLight objects in the world editor, then click this button")
     
     im.Dummy(im.ImVec2(0, 10))
-    im.TextUnformatted("3. Generate Lights")
+    im.TextUnformatted("3. Select TSStatic Object(s) to Copy (Optional)")
+    im.Separator()
+    
+    -- Display selected TSStatic objects
+    local tsStaticsStr = "none"
+    if #selectedTSStaticIds > 0 then
+      tsStaticsStr = #selectedTSStaticIds .. " TSStatic object(s) selected"
+    end
+    im.TextUnformatted("Selected TSStatic Objects: " .. tsStaticsStr)
+    
+    -- Get TSStatic(s) by Selection button
+    if im.Button("Get TSStatic(s) by Selection") then
+      local selection = getSelectionByClass({"TSStatic"})
+      if #selection > 0 then
+        selectedTSStaticIds = selection
+        log("I", "alexkidd_generate_lights", "Selected " .. #selectedTSStaticIds .. " TSStatic objects")
+      else
+        log("W", "alexkidd_generate_lights", "No TSStatic objects selected")
+      end
+    end
+    im.tooltip("Select one or more TSStatic objects in the world editor, then click this button")
+    
+    im.Dummy(im.ImVec2(0, 10))
+    im.TextUnformatted("4. Generate Objects")
     im.Separator()
     
     -- Generate Lights button
-    local canGenerate = selectedTemplate.type ~= nil and #selectedLightIds > 0
+    local canGenerate = selectedTemplate.type ~= nil and (#selectedLightIds > 0 or #selectedTSStaticIds > 0)
     if not canGenerate then
       im.BeginDisabled()
     end
@@ -420,7 +594,7 @@ local function onEditorGui()
     if im.Button("Generate Lights") then
       generateLights()
     end
-    im.tooltip("Generate lights at all matching objects in the scene (TSStatic or Forest items)")
+    im.tooltip("Generate lights and TSStatic objects at all matching objects in the scene (TSStatic or Forest items)")
     
     if not canGenerate then
       im.EndDisabled()
@@ -429,7 +603,7 @@ local function onEditorGui()
     im.Dummy(im.ImVec2(0, 10))
     im.Separator()
     im.TextUnformatted("Info:")
-    im.TextWrapped("This tool generates lights relative to objects. Supports both TSStatic objects AND Forest items! Select a template object and its lights, then click Generate Lights.")
+    im.TextWrapped("This tool generates lights and TSStatic objects relative to template objects. Supports both TSStatic objects AND Forest items! Select a template object, its lights and/or TSStatic objects, then click Generate Lights.")
   end
   editor.endWindow()
 end
