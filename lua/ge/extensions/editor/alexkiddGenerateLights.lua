@@ -7,8 +7,8 @@
 
 local M = {}
 local im = ui_imgui
-local toolWindowName = "Generate Lights"
-local toolName = "Generate Lights"
+local toolWindowName = "Replicate Lights and Objects v1.1.0"
+local toolName = "Replicate Lights and Objects"
 
 -- State variables
 local selectedTemplate = {
@@ -21,6 +21,7 @@ local selectedTemplate = {
 }
 local selectedLightIds = {}
 local selectedTSStaticIds = {}
+local useSimGroup = im.BoolPtr(true)
 
 -- Helper function to get forest data
 local function getForestData()
@@ -81,7 +82,50 @@ local function getSelectedForestItem()
   return nil
 end
 
--- Get template object from selection (TSStatic or Forest item)
+-- Load the objectHistoryActions API for proper undo/redo
+local objectHistoryActions = require("editor/api/objectHistoryActions")()
+
+-- Undo function: deletes all created objects using proper API
+local function generateObjectsUndo(data)
+  if data.groupId then
+    -- Delete the group (which includes all children)
+    objectHistoryActions.deleteObjectRedo({objectId = data.groupId})
+  else
+    -- Serialize objects on-demand before deleting (only when needed for undo)
+    if not data.serializedObjects then
+      data.serializedObjects = {}
+      for _, id in ipairs(data.createdObjectIds) do
+        local obj = Sim.findObjectById(id)
+        if obj then
+          table.insert(data.serializedObjects, "[" .. obj:serializeForEditor(true, -1, "") .. "]")
+        end
+      end
+    end
+    
+    -- Delete objects individually
+    for _, id in ipairs(data.createdObjectIds) do
+      objectHistoryActions.deleteObjectRedo({objectId = id})
+    end
+  end
+  editor.clearObjectSelection()
+  log("I", "alexkidd_generate_lights", "Undone: Removed " .. (data.groupId and "group" or #data.createdObjectIds .. " objects"))
+end
+
+-- Redo function: recreates all objects using proper API
+local function generateObjectsRedo(data)
+  if data.groupId then
+    -- Restore the group (which includes all children)
+    objectHistoryActions.deleteObjectUndo({objectId = data.groupId, serializedData = data.serializedData, isSimSet = true})
+  else
+    -- Restore objects individually using serialized data
+    for i, id in ipairs(data.createdObjectIds) do
+      if data.serializedObjects and data.serializedObjects[i] then
+        objectHistoryActions.deleteObjectUndo({objectId = id, serializedData = data.serializedObjects[i]})
+      end
+    end
+  end
+  log("I", "alexkidd_generate_lights", "Redone: Restored " .. (data.groupId and "group" or #data.createdObjectIds .. " objects"))
+end
 local function getTemplateFromSelection()
   -- Check for TSStatic selection
   local tsStaticSelection = getSelectionByClass({"TSStatic"})
@@ -168,10 +212,15 @@ local function calculateRelativeTransforms(template, lightIds)
       local worldRelativePos = lightPos - shapePos
       local localRelativePos = shapeRotInverse * worldRelativePos
       
+      -- Get the parent group of this light
+      local parentGroupId = tonumber(light:getField("parentGroup", 0))
+      local parentGroup = scenetree.findObjectById(parentGroupId) or scenetree.MissionGroup
+      
       table.insert(relativeTransforms, {
         lightId = lightId,
         relativePosition = localRelativePos,
-        className = light:getClassName()
+        className = light:getClassName(),
+        parentGroup = parentGroup
       })
     end
   end
@@ -226,10 +275,15 @@ local function calculateRelativeTransformsForTSStatic(template, tsStaticIds)
       -- Calculate relative rotation
       local localRelativeRot = shapeRotInverse * tsStaticRot
       
+      -- Get the parent group of this TSStatic
+      local parentGroupId = tonumber(tsStatic:getField("parentGroup", 0))
+      local parentGroup = scenetree.findObjectById(parentGroupId) or scenetree.MissionGroup
+      
       table.insert(relativeTransforms, {
         tsStaticId = tsStaticId,
         relativePosition = localRelativePos,
-        relativeRotation = localRelativeRot
+        relativeRotation = localRelativeRot,
+        parentGroup = parentGroup
       })
     end
   end
@@ -251,7 +305,7 @@ local function createLightFromTemplate(templateLightId, relativePos, targetObj, 
   local uniqueName = "generated_" .. string.lower(lightType) .. "_" .. lightIndex .. "_" .. os.time() .. "_" .. math.random(100, 999)
   newLight.name = uniqueName
   newLight:setField('internalName', 0, uniqueName)
-  newLight:registerObject()
+  newLight:registerObject(uniqueName)
   
   -- Copy all properties from template
   newLight:assignFieldsFromObject(templateLight)
@@ -259,7 +313,7 @@ local function createLightFromTemplate(templateLightId, relativePos, targetObj, 
   newLight:setField('internalName', 0, uniqueName)
   newLight.name = uniqueName
   
-  -- Get target position and rotation
+  -- Get target position and rotation (AFTER copying fields)
   local targetPos, targetRot
   if type(targetObj) == "userdata" and targetObj.getPosition then
     targetPos = vec3(targetObj:getPosition())
@@ -273,11 +327,13 @@ local function createLightFromTemplate(templateLightId, relativePos, targetObj, 
   local finalLightPos = targetPos + rotatedOffset
   
   newLight:setPosition(finalLightPos)
+  
+  -- Add to target group AFTER everything else
   targetGroup:addObject(newLight.obj)
   
   log("I", "alexkidd_generate_lights", "Created " .. lightType .. " at position: " .. finalLightPos.x .. ", " .. finalLightPos.y .. ", " .. finalLightPos.z)
   
-  return newLight
+  return newLight.obj:getId()
 end
 
 -- Create a TSStatic from template at target object
@@ -299,7 +355,7 @@ local function createTSStaticFromTemplate(templateTSStaticId, relativePos, relat
   local uniqueName = "generated_tsstatic_" .. objectIndex .. "_" .. os.time() .. "_" .. math.random(100, 999)
   newTSStatic.name = uniqueName
   newTSStatic:setField('internalName', 0, uniqueName)
-  newTSStatic:registerObject()
+  newTSStatic:registerObject(uniqueName)
   
   -- Copy all properties from template (this will overwrite some fields, so we set them again after)
   newTSStatic:assignFieldsFromObject(templateTSStatic)
@@ -308,7 +364,7 @@ local function createTSStaticFromTemplate(templateTSStaticId, relativePos, relat
   newTSStatic:setField('internalName', 0, uniqueName)
   newTSStatic.name = uniqueName
   
-  -- Get target position and rotation
+  -- Get target position and rotation (AFTER copying fields)
   local targetPos, targetRot
   if type(targetObj) == "userdata" and targetObj.getPosition then
     targetPos = vec3(targetObj:getPosition())
@@ -325,11 +381,14 @@ local function createTSStaticFromTemplate(templateTSStaticId, relativePos, relat
   
   newTSStatic:setPosRot(finalPos.x, finalPos.y, finalPos.z, finalRot.x, finalRot.y, finalRot.z, finalRot.w)
   
+  -- Add to target group AFTER everything else
   targetGroup:addObject(newTSStatic.obj)
+  newTSStatic:setField('internalName', 0, uniqueName)
+  newTSStatic.name = uniqueName
   
   log("I", "alexkidd_generate_lights", "Created TSStatic at position: " .. finalPos.x .. ", " .. finalPos.y .. ", " .. finalPos.z)
   
-  return newTSStatic
+  return newTSStatic.obj:getId()
 end
 
 -- Find all forest items matching a shape file
@@ -375,13 +434,29 @@ local function generateObjects()
     return
   end
   
-  local groupNumber = getNextGeneratedLightsNumber()
-  local groupName = "generated_lights_" .. groupNumber
-  local newGroup = createObject("SimGroup")
-  newGroup:registerObject(groupName)
-  scenetree.MissionGroup:addObject(newGroup)
+  -- Determine target group strategy
+  local useSharedGroup = useSimGroup[0]
+  local sharedTargetGroup = nil
+  local groupName = nil
   
-  log("I", "alexkidd_generate_lights", "Created group: " .. groupName)
+  if useSharedGroup then
+    -- Create a new folder/group for all objects
+    local groupNumber = getNextGeneratedLightsNumber()
+    groupName = "generated_lights_" .. groupNumber
+    local newGroup = createObject("SimGroup")
+    newGroup:registerObject(groupName)
+    scenetree.MissionGroup:addObject(newGroup)
+    sharedTargetGroup = newGroup
+    log("I", "alexkidd_generate_lights", "Created group: " .. groupName)
+  else
+    log("I", "alexkidd_generate_lights", "Using individual source object parent groups")
+  end
+  
+  -- Prepare undo data (only need to track created objects for deletion)
+  local actionData = {
+    createdObjectIds = {},
+    groupId = useSharedGroup and sharedTargetGroup:getId() or nil
+  }
   
   local targetObjects = {}
   local lightsCreated = 0
@@ -419,30 +494,38 @@ local function generateObjects()
       if targetShape:getId() ~= selectedTemplate.id then
         for transformIndex, transform in ipairs(relativeTransforms) do
           local lightIndex = (shapeIndex - 1) * #relativeTransforms + transformIndex
-          local newLight = createLightFromTemplate(
+          -- Use shared group or individual parent group
+          local targetGroup = useSharedGroup and sharedTargetGroup or transform.parentGroup
+          
+          local lightId = createLightFromTemplate(
             transform.lightId,
             transform.relativePosition,
             targetShape,
             lightIndex,
-            newGroup
+            targetGroup
           )
-          if newLight then
+          if lightId then
             lightsCreated = lightsCreated + 1
+            table.insert(actionData.createdObjectIds, lightId)
           end
         end
         
         for transformIndex, transform in ipairs(relativeTSStaticTransforms) do
           local objectIndex = (shapeIndex - 1) * #relativeTSStaticTransforms + transformIndex
-          local newTSStatic = createTSStaticFromTemplate(
+          -- Use shared group or individual parent group
+          local targetGroup = useSharedGroup and sharedTargetGroup or transform.parentGroup
+          
+          local tsStaticId = createTSStaticFromTemplate(
             transform.tsStaticId,
             transform.relativePosition,
             transform.relativeRotation,
             targetShape,
             objectIndex,
-            newGroup
+            targetGroup
           )
-          if newTSStatic then
+          if tsStaticId then
             tsStaticsCreated = tsStaticsCreated + 1
+            table.insert(actionData.createdObjectIds, tsStaticId)
           end
         end
       end
@@ -462,37 +545,97 @@ local function generateObjects()
       if not isTemplateItem then
         for transformIndex, transform in ipairs(relativeTransforms) do
           local lightIndex = (itemIndex - 1) * #relativeTransforms + transformIndex
-          local newLight = createLightFromTemplate(
+          -- Use shared group or individual parent group
+          local targetGroup = useSharedGroup and sharedTargetGroup or transform.parentGroup
+          
+          local lightId = createLightFromTemplate(
             transform.lightId,
             transform.relativePosition,
             itemData,
             lightIndex,
-            newGroup
+            targetGroup
           )
-          if newLight then
+          if lightId then
             lightsCreated = lightsCreated + 1
+            table.insert(actionData.createdObjectIds, lightId)
           end
         end
         
         for transformIndex, transform in ipairs(relativeTSStaticTransforms) do
           local objectIndex = (itemIndex - 1) * #relativeTSStaticTransforms + transformIndex
-          local newTSStatic = createTSStaticFromTemplate(
+          -- Use shared group or individual parent group
+          local targetGroup = useSharedGroup and sharedTargetGroup or transform.parentGroup
+          
+          local tsStaticId = createTSStaticFromTemplate(
             transform.tsStaticId,
             transform.relativePosition,
             transform.relativeRotation,
             itemData,
             objectIndex,
-            newGroup
+            targetGroup
           )
-          if newTSStatic then
+          if tsStaticId then
             tsStaticsCreated = tsStaticsCreated + 1
+            table.insert(actionData.createdObjectIds, tsStaticId)
           end
         end
       end
     end
   end
   
-  log("I", "alexkidd_generate_lights", "Generated " .. lightsCreated .. " lights and " .. tsStaticsCreated .. " TSStatic objects in group " .. groupName)
+  -- Serialize objects for undo/redo system
+  if useSharedGroup and sharedTargetGroup then
+    -- Serialize the whole group with all its children
+    local grp = Sim.upcast(sharedTargetGroup.obj)
+    local serializeData = {}
+    
+    local function serializeRecursively(fn, parent, tbl)
+      parent = Sim.upcast(parent)
+      tbl.json = "[" .. parent:serializeForEditor(true, -1, "group") .. "]"
+      tbl.objectId = parent:getID()
+      tbl.children = {}
+      for i = 0, parent:size() - 1 do
+        local chd = parent:at(i)
+        if chd then
+          local childTbl = {
+            objectId = chd:getID(),
+            json = "[" .. chd:serializeForEditor(true, -1, "") .. "]",
+          }
+          table.insert(tbl.children, childTbl)
+        end
+      end
+    end
+    
+    serializeRecursively(serializeRecursively, grp, serializeData)
+    actionData.serializedData = serializeData
+    actionData.isSimSet = true
+  else
+    -- For individual objects, don't pre-serialize - serialize on-demand during undo/redo
+    -- This is much faster for large numbers of objects
+    actionData.parentGroupIds = {}
+    for _, id in ipairs(actionData.createdObjectIds) do
+      local obj = scenetree.findObjectById(id)
+      if obj then
+        local parentGroupId = tonumber(obj:getField("parentGroup", 0))
+        table.insert(actionData.parentGroupIds, parentGroupId)
+      end
+    end
+  end
+  
+  -- Commit to undo history with redo function
+  local groupDisplayName = useSharedGroup and (groupName or "generated group") or "source object parent groups"
+  local actionName = "Generate Lights and TSStatic Objects"
+  if lightsCreated > 0 and tsStaticsCreated == 0 then
+    actionName = "Generate " .. lightsCreated .. " Lights"
+  elseif tsStaticsCreated > 0 and lightsCreated == 0 then
+    actionName = "Generate " .. tsStaticsCreated .. " TSStatic Objects"
+  else
+    actionName = "Generate " .. lightsCreated .. " Lights and " .. tsStaticsCreated .. " TSStatic Objects"
+  end
+  
+  editor.history:commitAction(actionName, actionData, generateObjectsUndo, generateObjectsRedo)
+  
+  log("I", "alexkidd_generate_lights", "Generated " .. lightsCreated .. " lights and " .. tsStaticsCreated .. " TSStatic objects in " .. groupDisplayName)
   editor.setDirty()
 end
 
@@ -604,7 +747,14 @@ local function onEditorGui()
     im.tooltip("Clear the current TSStatic selection")
     
     im.Dummy(im.ImVec2(0, 10))
-    im.TextUnformatted("4. Generate Objects")
+    im.TextUnformatted("4. Options")
+    im.Separator()
+    
+    im.Checkbox("Use New Folder", useSimGroup)
+    im.tooltip("If checked, creates a new 'generated_lights_X' folder. If unchecked, places objects in the same group as the template object.")
+    
+    im.Dummy(im.ImVec2(0, 10))
+    im.TextUnformatted("5. Generate Objects")
     im.Separator()
     
     -- Generate button with dynamic text
