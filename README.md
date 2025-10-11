@@ -10,10 +10,7 @@ A BeamNG.drive editor extension that automatically replicates lights and TSStati
 - Flexible grouping options
 
 ## Installation
-Place `alexkiddGenerateLights.lua` in:
-```
-BeamNG.drive/lua/ge/extensions/editor/
-```
+Place `alexkidd_beamng_worldeditor_plugins.zip` in the mods folder situated in your BeamNG userfolder.
 
 ## Quick Start
 
@@ -34,7 +31,7 @@ BeamNG.drive/lua/ge/extensions/editor/
 - Forest item illumination
 
 ## Options
-- **Use New Folder** - Groups generated objects in a numbered folder for easy management
+- **Use New Folder** - Groups generated objects in a numbered folder for easy management. If unchecked the objects will be placed in the source objects group
 
 ## Author
 Sascha Kleinwächter (AlexKidd71)
