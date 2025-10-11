@@ -169,10 +169,15 @@ local function calculateRelativeTransforms(template, lightIds)
       local worldRelativePos = lightPos - shapePos
       local localRelativePos = shapeRotInverse * worldRelativePos
       
+      -- Get the parent group of this light
+      local parentGroupId = tonumber(light:getField("parentGroup", 0))
+      local parentGroup = scenetree.findObjectById(parentGroupId) or scenetree.MissionGroup
+      
       table.insert(relativeTransforms, {
         lightId = lightId,
         relativePosition = localRelativePos,
-        className = light:getClassName()
+        className = light:getClassName(),
+        parentGroup = parentGroup
       })
     end
   end
@@ -227,10 +232,15 @@ local function calculateRelativeTransformsForTSStatic(template, tsStaticIds)
       -- Calculate relative rotation
       local localRelativeRot = shapeRotInverse * tsStaticRot
       
+      -- Get the parent group of this TSStatic
+      local parentGroupId = tonumber(tsStatic:getField("parentGroup", 0))
+      local parentGroup = scenetree.findObjectById(parentGroupId) or scenetree.MissionGroup
+      
       table.insert(relativeTransforms, {
         tsStaticId = tsStaticId,
         relativePosition = localRelativePos,
-        relativeRotation = localRelativeRot
+        relativeRotation = localRelativeRot,
+        parentGroup = parentGroup
       })
     end
   end
@@ -381,46 +391,21 @@ local function generateObjects()
     return
   end
   
-  -- Determine target groups for each object type
-  local lightTargetGroup, tsStaticTargetGroup
+  -- Determine target group strategy
+  local useSharedGroup = useSimGroup[0]
+  local sharedTargetGroup = nil
   
-  if useSimGroup[0] then
+  if useSharedGroup then
     -- Create a new folder/group for all objects
     local groupNumber = getNextGeneratedLightsNumber()
     local groupName = "generated_lights_" .. groupNumber
     local newGroup = createObject("SimGroup")
     newGroup:registerObject(groupName)
     scenetree.MissionGroup:addObject(newGroup)
-    lightTargetGroup = newGroup
-    tsStaticTargetGroup = newGroup
+    sharedTargetGroup = newGroup
     log("I", "alexkidd_generate_lights", "Created group: " .. groupName)
   else
-    -- Use the parent group of each source object type
-    -- Get the parent group for lights
-    if #relativeTransforms > 0 then
-      local firstLightId = relativeTransforms[1].lightId
-      local lightObj = scenetree.findObjectById(firstLightId)
-      if lightObj then
-        local parentGroupId = tonumber(lightObj:getField("parentGroup", 0))
-        lightTargetGroup = scenetree.findObjectById(parentGroupId) or scenetree.MissionGroup
-        log("I", "alexkidd_generate_lights", "Using light source parent group: " .. (lightTargetGroup:getName() or "MissionGroup"))
-      else
-        lightTargetGroup = scenetree.MissionGroup
-      end
-    end
-    
-    -- Get the parent group for TSStatics
-    if #relativeTSStaticTransforms > 0 then
-      local firstTSStaticId = relativeTSStaticTransforms[1].tsStaticId
-      local tsStaticObj = scenetree.findObjectById(firstTSStaticId)
-      if tsStaticObj then
-        local parentGroupId = tonumber(tsStaticObj:getField("parentGroup", 0))
-        tsStaticTargetGroup = scenetree.findObjectById(parentGroupId) or scenetree.MissionGroup
-        log("I", "alexkidd_generate_lights", "Using TSStatic source parent group: " .. (tsStaticTargetGroup:getName() or "MissionGroup"))
-      else
-        tsStaticTargetGroup = scenetree.MissionGroup
-      end
-    end
+    log("I", "alexkidd_generate_lights", "Using individual source object parent groups")
   end
   
   local targetObjects = {}
@@ -459,12 +444,14 @@ local function generateObjects()
       if targetShape:getId() ~= selectedTemplate.id then
         for transformIndex, transform in ipairs(relativeTransforms) do
           local lightIndex = (shapeIndex - 1) * #relativeTransforms + transformIndex
+          -- Use shared group or individual parent group
+          local targetGroup = useSharedGroup and sharedTargetGroup or transform.parentGroup
           local newLight = createLightFromTemplate(
             transform.lightId,
             transform.relativePosition,
             targetShape,
             lightIndex,
-            lightTargetGroup
+            targetGroup
           )
           if newLight then
             lightsCreated = lightsCreated + 1
@@ -473,13 +460,15 @@ local function generateObjects()
         
         for transformIndex, transform in ipairs(relativeTSStaticTransforms) do
           local objectIndex = (shapeIndex - 1) * #relativeTSStaticTransforms + transformIndex
+          -- Use shared group or individual parent group
+          local targetGroup = useSharedGroup and sharedTargetGroup or transform.parentGroup
           local newTSStatic = createTSStaticFromTemplate(
             transform.tsStaticId,
             transform.relativePosition,
             transform.relativeRotation,
             targetShape,
             objectIndex,
-            tsStaticTargetGroup
+            targetGroup
           )
           if newTSStatic then
             tsStaticsCreated = tsStaticsCreated + 1
@@ -502,12 +491,14 @@ local function generateObjects()
       if not isTemplateItem then
         for transformIndex, transform in ipairs(relativeTransforms) do
           local lightIndex = (itemIndex - 1) * #relativeTransforms + transformIndex
+          -- Use shared group or individual parent group
+          local targetGroup = useSharedGroup and sharedTargetGroup or transform.parentGroup
           local newLight = createLightFromTemplate(
             transform.lightId,
             transform.relativePosition,
             itemData,
             lightIndex,
-            lightTargetGroup
+            targetGroup
           )
           if newLight then
             lightsCreated = lightsCreated + 1
@@ -516,13 +507,15 @@ local function generateObjects()
         
         for transformIndex, transform in ipairs(relativeTSStaticTransforms) do
           local objectIndex = (itemIndex - 1) * #relativeTSStaticTransforms + transformIndex
+          -- Use shared group or individual parent group
+          local targetGroup = useSharedGroup and sharedTargetGroup or transform.parentGroup
           local newTSStatic = createTSStaticFromTemplate(
             transform.tsStaticId,
             transform.relativePosition,
             transform.relativeRotation,
             itemData,
             objectIndex,
-            tsStaticTargetGroup
+            targetGroup
           )
           if newTSStatic then
             tsStaticsCreated = tsStaticsCreated + 1
@@ -532,12 +525,8 @@ local function generateObjects()
     end
   end
   
-  local groupNames = {}
-  if lightTargetGroup then table.insert(groupNames, lightTargetGroup:getName() or "MissionGroup") end
-  if tsStaticTargetGroup and tsStaticTargetGroup ~= lightTargetGroup then table.insert(groupNames, tsStaticTargetGroup:getName() or "MissionGroup") end
-  local groupName = table.concat(groupNames, " and ") 
-  if groupName == "" then groupName = "MissionGroup" end
-  log("I", "alexkidd_generate_lights", "Generated " .. lightsCreated .. " lights and " .. tsStaticsCreated .. " TSStatic objects in group " .. groupName)
+  local groupName = useSharedGroup and (sharedTargetGroup:getName() or "generated group") or "source object parent groups"
+  log("I", "alexkidd_generate_lights", "Generated " .. lightsCreated .. " lights and " .. tsStaticsCreated .. " TSStatic objects in " .. groupName)
   editor.setDirty()
 end
 
