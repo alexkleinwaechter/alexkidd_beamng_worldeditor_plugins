@@ -1,0 +1,23 @@
+name: Zip Lua Folder on Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  zip-lua-folder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Create ZIP of lua folder
+        run: |
+          zip -r lua.zip lua
+
+      - name: Upload ZIP as Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: lua.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
