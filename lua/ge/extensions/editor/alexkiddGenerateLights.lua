@@ -7,8 +7,8 @@
 
 local M = {}
 local im = ui_imgui
-local toolWindowName = "Generate Lights"
-local toolName = "Generate Lights"
+local toolWindowName = "Replicate Lights and Objects v1.1.0"
+local toolName = "Replicate Lights and Objects"
 
 -- State variables
 local selectedTemplate = {
