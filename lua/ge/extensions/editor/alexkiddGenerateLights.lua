@@ -91,6 +91,17 @@ local function generateObjectsUndo(data)
     -- Delete the group (which includes all children)
     objectHistoryActions.deleteObjectRedo({objectId = data.groupId})
   else
+    -- Serialize objects on-demand before deleting (only when needed for undo)
+    if not data.serializedObjects then
+      data.serializedObjects = {}
+      for _, id in ipairs(data.createdObjectIds) do
+        local obj = Sim.findObjectById(id)
+        if obj then
+          table.insert(data.serializedObjects, "[" .. obj:serializeForEditor(true, -1, "") .. "]")
+        end
+      end
+    end
+    
     -- Delete objects individually
     for _, id in ipairs(data.createdObjectIds) do
       objectHistoryActions.deleteObjectRedo({objectId = id})
@@ -106,9 +117,11 @@ local function generateObjectsRedo(data)
     -- Restore the group (which includes all children)
     objectHistoryActions.deleteObjectUndo({objectId = data.groupId, serializedData = data.serializedData, isSimSet = true})
   else
-    -- Restore objects individually
+    -- Restore objects individually using serialized data
     for i, id in ipairs(data.createdObjectIds) do
-      objectHistoryActions.deleteObjectUndo({objectId = id, serializedData = data.serializedObjects[i]})
+      if data.serializedObjects and data.serializedObjects[i] then
+        objectHistoryActions.deleteObjectUndo({objectId = id, serializedData = data.serializedObjects[i]})
+      end
     end
   end
   log("I", "alexkidd_generate_lights", "Redone: Restored " .. (data.groupId and "group" or #data.createdObjectIds .. " objects"))
@@ -597,12 +610,14 @@ local function generateObjects()
     actionData.serializedData = serializeData
     actionData.isSimSet = true
   else
-    -- Serialize individual objects
-    actionData.serializedObjects = {}
+    -- For individual objects, don't pre-serialize - serialize on-demand during undo/redo
+    -- This is much faster for large numbers of objects
+    actionData.parentGroupIds = {}
     for _, id in ipairs(actionData.createdObjectIds) do
-      local obj = Sim.findObjectById(id)
+      local obj = scenetree.findObjectById(id)
       if obj then
-        table.insert(actionData.serializedObjects, "[" .. obj:serialize(true, -1) .. "]")
+        local parentGroupId = tonumber(obj:getField("parentGroup", 0))
+        table.insert(actionData.parentGroupIds, parentGroupId)
       end
     end
   end
