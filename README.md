@@ -7,7 +7,7 @@ A BeamNG.drive editor extension that automatically replicates lights and TSStati
 - Works with both TSStatic objects and Forest items as templates
 - Batch generation across all matching shapes in the scene
 - Full undo/redo support
-- Flexible grouping options
+- Generate to new simgroup or to simgroups of each selected object
 
 ## Installation
 Place `alexkidd_beamng_worldeditor_plugins.zip` in the mods folder situated in your BeamNG userfolder.
