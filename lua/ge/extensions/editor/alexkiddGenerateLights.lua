@@ -7,7 +7,7 @@
 
 local M = {}
 local im = ui_imgui
-local toolWindowName = "Replicate Lights and Objects v1.1.0"
+local toolWindowName = "Replicate Lights and Objects v1.2.0"
 local toolName = "Replicate Lights and Objects"
 
 -- State variables
@@ -34,6 +34,18 @@ local function quatFromMatrix(matrix)
   local fwd = matrix:getColumn(1):normalized()
   local up = matrix:getColumn(2):normalized()
   return quatFromDir(fwd, up)
+end
+
+-- Helper function to parse scale from string "x y z" to vec3
+local function parseScale(scaleStr)
+  if not scaleStr or scaleStr == "" then
+    return vec3(1, 1, 1)
+  end
+  local x, y, z = scaleStr:match("([%d%.%-]+)%s+([%d%.%-]+)%s+([%d%.%-]+)")
+  if x and y and z then
+    return vec3(tonumber(x) or 1, tonumber(y) or 1, tonumber(z) or 1)
+  end
+  return vec3(1, 1, 1)
 end
 
 -- Helper function to get the highest existing generated_lights group number
@@ -173,13 +185,16 @@ end
 local function calculateRelativeTransforms(template, lightIds)
   if not template or not template.type then return {} end
   
-  local shapePos, shapeRot
+  local shapePos, shapeRot, shapeScale
   
   if template.type == "TSStatic" then
     local shape = scenetree.findObjectById(template.id)
     if not shape then return {} end
     shapePos = vec3(shape:getPosition())
     shapeRot = quat(shape:getRotation())
+    -- Get scale from TSStatic
+    local scaleStr = shape:getField('scale', 0)
+    shapeScale = parseScale(scaleStr)
   elseif template.type == "ForestItem" then
     local forestData = getForestData()
     if not forestData then return {} end
@@ -197,6 +212,8 @@ local function calculateRelativeTransforms(template, lightIds)
     shapePos = vec3(forestItem:getPosition())
     local transform = forestItem:getTransform()
     shapeRot = quatFromMatrix(transform)
+    -- Get scale from Forest item
+    shapeScale = forestItem:getScale()
   else
     return {}
   end
@@ -211,6 +228,13 @@ local function calculateRelativeTransforms(template, lightIds)
       local lightPos = vec3(light:getPosition())
       local worldRelativePos = lightPos - shapePos
       local localRelativePos = shapeRotInverse * worldRelativePos
+      
+      -- Normalize by template scale (divide by scale to get scale-independent position)
+      localRelativePos = vec3(
+        localRelativePos.x / shapeScale.x,
+        localRelativePos.y / shapeScale.y,
+        localRelativePos.z / shapeScale.z
+      )
       
       -- Get the parent group of this light
       local parentGroupId = tonumber(light:getField("parentGroup", 0))
@@ -232,13 +256,16 @@ end
 local function calculateRelativeTransformsForTSStatic(template, tsStaticIds)
   if not template or not template.type then return {} end
   
-  local shapePos, shapeRot
+  local shapePos, shapeRot, shapeScale
   
   if template.type == "TSStatic" then
     local shape = scenetree.findObjectById(template.id)
     if not shape then return {} end
     shapePos = vec3(shape:getPosition())
     shapeRot = quat(shape:getRotation())
+    -- Get scale from TSStatic
+    local scaleStr = shape:getField('scale', 0)
+    shapeScale = parseScale(scaleStr)
   elseif template.type == "ForestItem" then
     local forestData = getForestData()
     if not forestData then return {} end
@@ -256,6 +283,8 @@ local function calculateRelativeTransformsForTSStatic(template, tsStaticIds)
     shapePos = vec3(forestItem:getPosition())
     local transform = forestItem:getTransform()
     shapeRot = quatFromMatrix(transform)
+    -- Get scale from Forest item
+    shapeScale = forestItem:getScale()
   else
     return {}
   end
@@ -271,6 +300,13 @@ local function calculateRelativeTransformsForTSStatic(template, tsStaticIds)
       local tsStaticRot = quat(tsStatic:getRotation())
       local worldRelativePos = tsStaticPos - shapePos
       local localRelativePos = shapeRotInverse * worldRelativePos
+      
+      -- Normalize by template scale (divide by scale to get scale-independent position)
+      localRelativePos = vec3(
+        localRelativePos.x / shapeScale.x,
+        localRelativePos.y / shapeScale.y,
+        localRelativePos.z / shapeScale.z
+      )
       
       -- Calculate relative rotation
       local localRelativeRot = shapeRotInverse * tsStaticRot
@@ -313,17 +349,29 @@ local function createLightFromTemplate(templateLightId, relativePos, targetObj, 
   newLight:setField('internalName', 0, uniqueName)
   newLight.name = uniqueName
   
-  -- Get target position and rotation (AFTER copying fields)
-  local targetPos, targetRot
+  -- Get target position, rotation, and scale (AFTER copying fields)
+  local targetPos, targetRot, targetScale
   if type(targetObj) == "userdata" and targetObj.getPosition then
+    -- TSStatic target
     targetPos = vec3(targetObj:getPosition())
     targetRot = quat(targetObj:getRotation())
+    local scaleStr = targetObj:getField('scale', 0)
+    targetScale = parseScale(scaleStr)
   else
+    -- Forest item target (from itemData)
     targetPos = targetObj.pos
     targetRot = targetObj.rot
+    targetScale = targetObj.scale and vec3(targetObj.scale, targetObj.scale, targetObj.scale) or vec3(1, 1, 1)
   end
   
-  local rotatedOffset = targetRot * relativePos
+  -- Apply target scale to the relative position
+  local scaledRelativePos = vec3(
+    relativePos.x * targetScale.x,
+    relativePos.y * targetScale.y,
+    relativePos.z * targetScale.z
+  )
+  
+  local rotatedOffset = targetRot * scaledRelativePos
   local finalLightPos = targetPos + rotatedOffset
   
   newLight:setPosition(finalLightPos)
@@ -364,18 +412,30 @@ local function createTSStaticFromTemplate(templateTSStaticId, relativePos, relat
   newTSStatic:setField('internalName', 0, uniqueName)
   newTSStatic.name = uniqueName
   
-  -- Get target position and rotation (AFTER copying fields)
-  local targetPos, targetRot
+  -- Get target position, rotation, and scale (AFTER copying fields)
+  local targetPos, targetRot, targetScale
   if type(targetObj) == "userdata" and targetObj.getPosition then
+    -- TSStatic target
     targetPos = vec3(targetObj:getPosition())
     targetRot = quat(targetObj:getRotation())
+    local scaleStr = targetObj:getField('scale', 0)
+    targetScale = parseScale(scaleStr)
   else
+    -- Forest item target (from itemData)
     targetPos = targetObj.pos
     targetRot = targetObj.rot
+    targetScale = targetObj.scale and vec3(targetObj.scale, targetObj.scale, targetObj.scale) or vec3(1, 1, 1)
   end
   
+  -- Apply target scale to the relative position
+  local scaledRelativePos = vec3(
+    relativePos.x * targetScale.x,
+    relativePos.y * targetScale.y,
+    relativePos.z * targetScale.z
+  )
+  
   -- Apply relative position and rotation
-  local rotatedOffset = targetRot * relativePos
+  local rotatedOffset = targetRot * scaledRelativePos
   local finalPos = targetPos + rotatedOffset
   local finalRot = targetRot * relativeRot
   
