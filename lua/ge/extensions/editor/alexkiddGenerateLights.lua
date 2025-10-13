@@ -10,6 +10,9 @@ local im = ui_imgui
 local toolWindowName = "Replicate Lights and Objects v1.3.0"
 local toolName = "Replicate Lights and Objects"
 
+-- Import light randomization module
+local lightRandomization = extensions.editor_alexkiddLightRandomization
+
 -- State variables
 local selectedTemplate = {
   type = nil,
@@ -22,6 +25,16 @@ local selectedTemplate = {
 local selectedLightIds = {}
 local selectedTSStaticIds = {}
 local useSimGroup = im.BoolPtr(true)
+
+-- Light randomization UI state variables
+local lightRandomizationEnabled = im.BoolPtr(true)
+local brightnessVariation = im.FloatPtr(0.25)
+local brightnessGain = im.FloatPtr(1.0)
+local colorVariation = im.FloatPtr(0.15)
+local colorGain = im.FloatPtr(1.0)
+local warmBiasRed = im.FloatPtr(1.02)
+local warmBiasGreen = im.FloatPtr(0.98)
+local warmBiasBlue = im.FloatPtr(0.85)
 
 -- Helper function to get forest data
 local function getForestData()
@@ -46,6 +59,23 @@ local function parseScale(scaleStr)
     return vec3(tonumber(x) or 1, tonumber(y) or 1, tonumber(z) or 1)
   end
   return vec3(1, 1, 1)
+end
+
+-- Helper function to update light randomization settings
+local function updateLightRandomizationSettings()
+  local config = {
+    enabled = lightRandomizationEnabled[0],
+    brightnessVariation = brightnessVariation[0],
+    brightnessGain = brightnessGain[0],
+    colorVariation = colorVariation[0],
+    colorGain = colorGain[0],
+    warmBias = {
+      red = warmBiasRed[0],
+      green = warmBiasGreen[0],
+      blue = warmBiasBlue[0]
+    }
+  }
+  lightRandomization.setLightRandomization(config)
 end
 
 -- Helper function to get the highest existing generated_lights group number
@@ -350,6 +380,23 @@ local function createLightFromTemplate(templateLightId, relativePos, targetObj, 
   
   newLight:setField('internalName', 0, uniqueName)
   newLight.name = uniqueName
+  
+  -- Apply light randomization if enabled
+  if lightRandomizationEnabled[0] then
+    -- Update randomization settings first
+    updateLightRandomizationSettings()
+    
+    -- Apply randomization to brightness and color
+    local templateBrightness = templateLight:getField('brightness', 0) or "1.0"
+    local templateColor = templateLight:getField('color', 0) or "1.0 1.0 1.0 1.0"
+    local randomizedBrightness, randomizedColor = lightRandomization.randomizeLightProperties(templateBrightness, templateColor, lightIndex)
+    
+    -- Set the randomized properties
+    newLight:setField('brightness', 0, randomizedBrightness)
+    newLight:setField('color', 0, randomizedColor)
+    
+    log("I", "alexkidd_generate_lights", "Applied light randomization: brightness " .. templateBrightness .. " -> " .. randomizedBrightness)
+  end
   
   -- Get target position, rotation, and scale (AFTER copying fields)
   local targetPos, targetRot, targetScale
@@ -816,7 +863,77 @@ local function onEditorGui()
     im.tooltip("If checked, creates a new 'generated_lights_X' folder. If unchecked, places objects in the same group as the template object.")
     
     im.Dummy(im.ImVec2(0, 10))
-    im.TextUnformatted("5. Generate Objects")
+    im.TextUnformatted("5. Light Randomization")
+    im.Separator()
+    
+    im.Checkbox("Enable Light Randomization", lightRandomizationEnabled)
+    im.tooltip("Apply random variations to light brightness and color for more natural lighting")
+    
+    if lightRandomizationEnabled[0] then
+      -- Brightness settings
+      im.TextUnformatted("Brightness Settings:")
+      im.SliderFloat("Brightness Variation", brightnessVariation, 0.0, 1.0, "%.2f")
+      im.tooltip("Amount of random brightness variation (±" .. string.format("%.0f", brightnessVariation[0] * 100) .. "%)")
+      
+      im.SliderFloat("Brightness Gain", brightnessGain, 0.1, 3.0, "%.2f")
+      im.tooltip("Overall brightness multiplier for all lights")
+      
+      im.Dummy(im.ImVec2(0, 5))
+      
+      -- Color settings
+      im.TextUnformatted("Color Settings:")
+      im.SliderFloat("Color Variation", colorVariation, 0.0, 0.5, "%.2f")
+      im.tooltip("Amount of random color variation per channel (±" .. string.format("%.0f", colorVariation[0] * 100) .. "%)")
+      
+      im.SliderFloat("Color Gain", colorGain, 0.1, 2.0, "%.2f")
+      im.tooltip("Overall color intensity multiplier")
+      
+      im.Dummy(im.ImVec2(0, 5))
+      
+      -- Warm bias settings
+      im.TextUnformatted("Warm Color Bias:")
+      im.SliderFloat("Red Bias", warmBiasRed, 0.8, 1.3, "%.2f")
+      im.tooltip("Red channel multiplier (>1.0 = more red, <1.0 = less red)")
+      
+      im.SliderFloat("Green Bias", warmBiasGreen, 0.8, 1.3, "%.2f")
+      im.tooltip("Green channel multiplier (>1.0 = more green, <1.0 = less green)")
+      
+      im.SliderFloat("Blue Bias", warmBiasBlue, 0.5, 1.2, "%.2f")
+      im.tooltip("Blue channel multiplier (>1.0 = more blue, <1.0 = less blue for warmer lights)")
+      
+      -- Preset buttons
+      im.Dummy(im.ImVec2(0, 5))
+      im.TextUnformatted("Presets:")
+      if im.Button("Warm Lights") then
+        warmBiasRed[0] = 1.05
+        warmBiasGreen[0] = 0.95
+        warmBiasBlue[0] = 0.75
+        brightnessVariation[0] = 0.2
+        colorVariation[0] = 0.1
+      end
+      im.SameLine()
+      if im.Button("Cool Lights") then
+        warmBiasRed[0] = 0.9
+        warmBiasGreen[0] = 1.0
+        warmBiasBlue[0] = 1.1
+        brightnessVariation[0] = 0.15
+        colorVariation[0] = 0.05
+      end
+      im.SameLine()
+      if im.Button("Reset") then
+        lightRandomizationEnabled[0] = true
+        brightnessVariation[0] = 0.25
+        brightnessGain[0] = 1.0
+        colorVariation[0] = 0.15
+        colorGain[0] = 1.0
+        warmBiasRed[0] = 1.02
+        warmBiasGreen[0] = 0.98
+        warmBiasBlue[0] = 0.85
+      end
+    end
+    
+    im.Dummy(im.ImVec2(0, 10))
+    im.TextUnformatted("6. Generate Objects")
     im.Separator()
     
     -- Generate button with dynamic text
@@ -867,10 +984,25 @@ local function onWindowMenuItem()
   editor.showWindow(toolWindowName)
 end
 
+-- Initialize light randomization UI with current settings
+local function initializeLightRandomizationUI()
+  local settings = lightRandomization.getLightRandomization()
+  lightRandomizationEnabled[0] = settings.enabled
+  brightnessVariation[0] = settings.brightnessVariation
+  brightnessGain[0] = settings.brightnessGain
+  colorVariation[0] = settings.colorVariation
+  colorGain[0] = settings.colorGain
+  warmBiasRed[0] = settings.warmBias.red
+  warmBiasGreen[0] = settings.warmBias.green
+  warmBiasBlue[0] = settings.warmBias.blue
+  log("I", "alexkidd_generate_lights", "Light randomization module initialized")
+end
+
 -- Initialize the plugin
 local function onEditorInitialized()
   editor.addWindowMenuItem(toolName, onWindowMenuItem)
-  editor.registerWindow(toolWindowName, im.ImVec2(420, 400))
+  editor.registerWindow(toolWindowName, im.ImVec2(420, 500))  -- Increased height for randomization UI
+  initializeLightRandomizationUI()
   log("I", "alexkidd_generate_lights", "Plugin initialized")
 end
 
