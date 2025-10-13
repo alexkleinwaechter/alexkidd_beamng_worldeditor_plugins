@@ -250,7 +250,13 @@ Application Phase (Target):
 | Object Type | Method | Format | Notes |
 |-------------|--------|--------|-------|
 | TSStatic | `obj:getField('scale', 0)` | String "x y z" | Parse with `parseScale()` |
-| ForestItem | `forestItem:getScale()` | Number (uniform) | Convert to vec3(n, n, n) |
+| ForestItem | `forestItem:getScale()` | Number (uniform) | **CRITICAL**: Convert to `vec3(n, n, n)` |
+
+⚠️ **CRITICAL BUG FIX**: ForestItem scale is a single number, NOT a vec3! Always convert:
+```lua
+local uniformScale = forestItem:getScale()  -- Returns number (e.g., 1.5)
+shapeScale = vec3(uniformScale, uniformScale, uniformScale)  -- Convert to vec3(1.5, 1.5, 1.5)
+```
 
 ### Implementation Checklist
 When modifying transform logic:
@@ -431,7 +437,7 @@ item:getData()          -- Returns item data with shapeFile
 
 ## Version History
 
-### v1.1.0 - Scale Support (October 13, 2025)
+### v1.2.0 - Scale Support + ForestItem Bug Fix (October 13, 2025)
 - ✅ Added `parseScale()` helper function
 - ✅ Updated `calculateRelativeTransforms()` with scale normalization
 - ✅ Updated `calculateRelativeTransformsForTSStatic()` with scale normalization
@@ -439,6 +445,7 @@ item:getData()          -- Returns item data with shapeFile
 - ✅ Updated `createTSStaticFromTemplate()` with scale application
 - ✅ Supports TSStatic scale field "x y z" format
 - ✅ Supports ForestItem uniform scale
+- ✅ **FIXED**: ForestItem scale conversion (number → vec3)
 - ✅ Handles non-uniform scales correctly
 - ✅ Backwards compatible (scale 1,1,1 behaves as before)
 

@@ -7,7 +7,7 @@
 
 local M = {}
 local im = ui_imgui
-local toolWindowName = "Replicate Lights and Objects v1.2.0"
+local toolWindowName = "Replicate Lights and Objects v1.3.0"
 local toolName = "Replicate Lights and Objects"
 
 -- State variables
@@ -212,8 +212,9 @@ local function calculateRelativeTransforms(template, lightIds)
     shapePos = vec3(forestItem:getPosition())
     local transform = forestItem:getTransform()
     shapeRot = quatFromMatrix(transform)
-    -- Get scale from Forest item
-    shapeScale = forestItem:getScale()
+    -- Get scale from Forest item (uniform scale - convert to vec3)
+    local uniformScale = forestItem:getScale()
+    shapeScale = vec3(uniformScale, uniformScale, uniformScale)
   else
     return {}
   end
@@ -283,8 +284,9 @@ local function calculateRelativeTransformsForTSStatic(template, tsStaticIds)
     shapePos = vec3(forestItem:getPosition())
     local transform = forestItem:getTransform()
     shapeRot = quatFromMatrix(transform)
-    -- Get scale from Forest item
-    shapeScale = forestItem:getScale()
+    -- Get scale from Forest item (uniform scale - convert to vec3)
+    local uniformScale = forestItem:getScale()
+    shapeScale = vec3(uniformScale, uniformScale, uniformScale)
   else
     return {}
   end
