@@ -83,6 +83,7 @@ local selectedSplineIdx, selectedNodeIdx, selectedLayerIdx = 1, 1, 1
 local isGizmoActive = false
 local isLockShape = false
 local isSplineAnalysisEnabled = false
+local isRenderOnlySelected = false
 local previousSelectedSplineIdx = -1
 local sliderPreEditState = nil
 local terraParams = {
@@ -242,7 +243,7 @@ local function handleMainToolWindowUI()
     local splines = splineMgr.getMasterSplines()
 
     -- Top buttons row.
-    im.Columns(7, "topMasterButtonsRow", false)
+    im.Columns(8, "topMasterButtonsRow", false)
     im.SetColumnWidth(0, 39)
     im.SetColumnWidth(1, 39)
     im.SetColumnWidth(2, 39)
@@ -250,6 +251,7 @@ local function handleMainToolWindowUI()
     im.SetColumnWidth(4, 39)
     im.SetColumnWidth(5, 39)
     im.SetColumnWidth(6, 39)
+    im.SetColumnWidth(7, 39)
     im.PushStyleVar2(im.StyleVar_FramePadding, im.ImVec2(2, 2))
     im.PushStyleVar2(im.StyleVar_ItemSpacing, im.ImVec2(4, 2))
 
@@ -640,6 +642,19 @@ local function handleMainToolWindowUI()
         "/")
     end
     im.tooltip('Load Master Splines from a JSON file (replaces all existing splines).')
+    im.SameLine()
+    im.NextColumn()
+
+    -- 'Render Only Selected Spline' toggle button.
+    if #splines > 0 then
+      local btnCol = isRenderOnlySelected and cols.blueB or cols.blueD
+      if editor.uiIconImageButton(icons.visibility, iconsBig, btnCol, nil, nil, 'renderOnlySelectedBtn') then
+        isRenderOnlySelected = not isRenderOnlySelected
+      end
+      im.tooltip(isRenderOnlySelected and 'Showing only selected spline. Click to show all splines.' or 'Showing all splines. Click to show only selected spline (improves performance with many splines).')
+    else
+      im.Dummy(iconsBig)
+    end
     im.NextColumn()
 
     im.PopStyleVar(2)
@@ -1881,16 +1896,23 @@ local function onEditorGui()
   selectedSplineIdx, selectedNodeIdx, selectedLayerIdx, isGizmoActive, isLockShape = out.spline, out.node, out.layer, out.isGizmoActive, out.isLockShape
 
   -- Render the spline (nodes, polyline, handles etc).
+  -- If isRenderOnlySelected is true, only render the selected spline for better performance.
+  local splinesToRender = masterSplines
+  local adjustedSplineIdx = selectedSplineIdx
+  if isRenderOnlySelected and selMasterSpline then
+    splinesToRender = { selMasterSpline }
+    adjustedSplineIdx = 1
+  end
   render.handleSplineRendering(
-    masterSplines, selectedSplineIdx, selectedNodeIdx,
+    splinesToRender, adjustedSplineIdx, selectedNodeIdx,
     isGizmoActive, true, isLockShape, true, true,
     elevScale)
 
   -- Render the surface.
   if isSplineAnalysisEnabled then
-    render.renderHomologatedSurface(masterSplines, selectedSplineIdx) -- Render a heatmap surface, to show high error spots.
+    render.renderHomologatedSurface(splinesToRender, adjustedSplineIdx) -- Render a heatmap surface, to show high error spots.
   else
-    render.renderRibbonWireFrame(masterSplines, selectedSplineIdx, 2)
+    render.renderRibbonWireFrame(splinesToRender, adjustedSplineIdx, 2)
   end
 
   -- Render the selected layer.
