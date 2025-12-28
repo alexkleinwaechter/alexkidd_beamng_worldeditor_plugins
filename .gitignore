@@ -8,6 +8,11 @@
 !lua/ge/extensions/editor/
 !lua/ge/extensions/editor/alexkidd*.*
 
+# Allow masterSpline files for save/load feature development
+!lua/ge/extensions/editor/masterSpline.lua
+!lua/ge/extensions/editor/masterSpline/
+!lua/ge/extensions/editor/masterSpline/*
+
 # Allow markdown documentation files in the editor directory
 !lua/ge/extensions/editor/*.md
 
